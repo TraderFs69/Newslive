@@ -1,48 +1,58 @@
 import streamlit as st
 import requests
-import pandas as pd
 import os
 import time
 import json
 from datetime import datetime, timezone
-from dotenv import load_dotenv
 from openai import OpenAI
 
-# =====================
-# CONFIG
-# =====================
-st.set_page_config(layout="wide", page_title="🚨 Social News — Trader Actif")
+# =====================================================
+# UTILITAIRE SECRETS (local + Streamlit Cloud)
+# =====================================================
+def get_secret(key):
+    return st.secrets.get(key, os.getenv(key))
+
+OPENAI_API_KEY = get_secret("OPENAI_API_KEY")
+DISCORD_WEBHOOK = get_secret("DISCORD_WEBHOOK_URL")
+
+client = OpenAI(api_key=OPENAI_API_KEY)
+
+# =====================================================
+# CONFIG GÉNÉRALE
+# =====================================================
+st.set_page_config(
+    page_title="🚨 Social News Trader",
+    layout="wide"
+)
+
 st.title("🚨 Social News Scanner — Trader Actif")
+st.caption("StockTwits live • Social spikes • LLM context • Discord alerts")
 
-load_dotenv()
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-DISCORD_WEBHOOK = os.getenv("DISCORD_WEBHOOK_URL")
+REFRESH_SEC = 60        # rafraîchissement
+WINDOW_SEC = 300        # fenêtre 5 minutes
 
-REFRESH_SEC = 60
-WINDOW_SEC = 300
-
-# =====================
+# =====================================================
 # WATCHLIST
-# =====================
+# =====================================================
 DEFAULT_WATCHLIST = (
     "SPY,QQQ,IWM,VIXY,IBIT,FBTC,"
     "NVDA,TSLA,AMD,META,SMCI,COIN,MARA,PLTR"
 )
 
-watchlist = st.sidebar.text_area(
-    "Watchlist (séparée par des virgules)",
-    DEFAULT_WATCHLIST
+watchlist_text = st.sidebar.text_area(
+    "📋 Watchlist (séparée par des virgules)",
+    DEFAULT_WATCHLIST,
+    height=120
 )
 
-tickers = [t.strip().upper() for t in watchlist.split(",") if t.strip()]
+tickers = [t.strip().upper() for t in watchlist_text.split(",") if t.strip()]
 
-# =====================
-# GROUPS
-# =====================
+# =====================================================
+# GROUPES & SEUILS
+# =====================================================
 ETF_INDEX = {"SPY", "QQQ", "IWM"}
 VIX_ETF = {"VIXY"}
 CRYPTO_ETF = {"IBIT", "FBTC"}
-ACTIONS = set(tickers) - ETF_INDEX - VIX_ETF - CRYPTO_ETF
 
 THRESHOLDS = {
     "ACTION": 12,
@@ -51,9 +61,9 @@ THRESHOLDS = {
     "CRYPTO": 20
 }
 
-# =====================
+# =====================================================
 # STOCKTWITS
-# =====================
+# =====================================================
 def fetch_stocktwits(symbol):
     try:
         url = f"https://api.stocktwits.com/api/2/streams/symbol/{symbol}.json"
@@ -64,23 +74,30 @@ def fetch_stocktwits(symbol):
 
 def recent_messages(messages):
     now = datetime.now(timezone.utc)
-    return [
-        m for m in messages
-        if (now - datetime.fromisoformat(m["created_at"].replace("Z", ""))).seconds < WINDOW_SEC
-    ]
+    recent = []
+    for m in messages:
+        try:
+            created = datetime.fromisoformat(
+                m["created_at"].replace("Z", "")
+            )
+            if (now - created).seconds < WINDOW_SEC:
+                recent.append(m)
+        except:
+            pass
+    return recent
 
-# =====================
-# LLM
-# =====================
+# =====================================================
+# LLM OPENAI (SEULEMENT SI UTILE)
+# =====================================================
 LLM_PROMPT = """
 You are an active stock trader.
 Explain why people are talking about this right now.
 
-Return ONLY JSON with:
+Return ONLY valid JSON with:
 bias (Bull/Bear/Neutral),
 tradeable (Yes/No),
 horizon (Intraday/Swing),
-risk (short),
+risk (one short sentence),
 summary (max 20 words).
 """
 
@@ -98,14 +115,15 @@ def llm_analyze(text):
     except:
         return None
 
-# =====================
+# =====================================================
 # DISCORD
-# =====================
-def send_discord(symbol, llm, count):
+# =====================================================
+def send_discord_alert(symbol, llm, count):
     if not DISCORD_WEBHOOK:
         return
 
     color = 3066993 if llm["bias"] == "Bull" else 15158332
+
     payload = {
         "embeds": [{
             "title": f"🚨 SOCIAL SPIKE — {symbol}",
@@ -115,41 +133,51 @@ def send_discord(symbol, llm, count):
                 {"name": "Bias", "value": llm["bias"], "inline": True},
                 {"name": "Horizon", "value": llm["horizon"], "inline": True},
                 {"name": "Risk", "value": llm["risk"], "inline": False},
-                {"name": "Summary", "value": llm["summary"], "inline": False}
+                {"name": "Summary", "value": llm["summary"], "inline": False},
             ],
-            "footer": {"text": "Social News Scanner"}
+            "footer": {"text": "Social News Scanner — Trader Actif"}
         }]
     }
+
     requests.post(DISCORD_WEBHOOK, json=payload, timeout=10)
 
-# =====================
-# SESSION ANTI-SPAM
-# =====================
-if "sent" not in st.session_state:
-    st.session_state.sent = set()
+# =====================================================
+# ANTI-SPAM SESSION
+# =====================================================
+if "sent_alerts" not in st.session_state:
+    st.session_state.sent_alerts = set()
 
-# =====================
-# MAIN LOOP
-# =====================
-st.subheader("📡 Live Social Signals")
+# =====================================================
+# MAIN
+# =====================================================
+st.subheader("📡 Social Signals Live")
 
 for symbol in tickers:
+
     messages = fetch_stocktwits(symbol)
     recent = recent_messages(messages)
     count = len(recent)
 
     if symbol in ETF_INDEX:
-        threshold, group = THRESHOLDS["ETF"], "ETF"
+        group = "ETF"
+        threshold = THRESHOLDS["ETF"]
     elif symbol in VIX_ETF:
-        threshold, group = THRESHOLDS["VIX"], "VIX"
+        group = "VIX"
+        threshold = THRESHOLDS["VIX"]
     elif symbol in CRYPTO_ETF:
-        threshold, group = THRESHOLDS["CRYPTO"], "CRYPTO"
+        group = "CRYPTO"
+        threshold = THRESHOLDS["CRYPTO"]
     else:
-        threshold, group = THRESHOLDS["ACTION"], "ACTION"
+        group = "ACTION"
+        threshold = THRESHOLDS["ACTION"]
 
     if count >= threshold:
+
         st.markdown(f"### 🔥 {symbol} — {count} messages / 5 min")
 
+        # ======================
+        # ACTIONS → LLM + DISCORD
+        # ======================
         if group == "ACTION":
             text = " ".join(m["body"] for m in recent[:20])
             llm = llm_analyze(text)
@@ -160,17 +188,25 @@ for symbol in tickers:
                 )
                 st.write(llm["summary"])
 
-                key = f"{symbol}_{recent[0]['id']}"
-                if llm["tradeable"] == "Yes" and key not in st.session_state.sent:
-                    send_discord(symbol, llm, count)
-                    st.session_state.sent.add(key)
+                alert_id = f"{symbol}_{recent[0]['id']}"
+
+                if (
+                    llm["tradeable"] == "Yes"
+                    and alert_id not in st.session_state.sent_alerts
+                ):
+                    send_discord_alert(symbol, llm, count)
+                    st.session_state.sent_alerts.add(alert_id)
+
+        # ======================
+        # ETF / VIX / CRYPTO → CONTEXTE SEULEMENT
+        # ======================
         else:
-            st.caption("🌐 Macro sentiment (no alert)")
+            st.caption("🌐 Macro sentiment — no Discord alert")
 
         st.divider()
 
-# =====================
+# =====================================================
 # AUTO REFRESH
-# =====================
+# =====================================================
 time.sleep(REFRESH_SEC)
 st.rerun()
