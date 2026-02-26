@@ -22,41 +22,69 @@ if not POLYGON_KEY:
 MAX_AGE_MINUTES = 15
 
 # -------------------------------------------------
-# STYLE FULL BLACK TERMINAL
+# BLOOMBERG CLASSIC STYLE
 # -------------------------------------------------
 
 st.markdown("""
 <style>
 html, body, [class*="css"] {
     background-color: #000000 !important;
-    color: white !important;
+    color: #ffffff !important;
+    font-family: monospace !important;
+}
+.bloom-header {
+    font-size: 18px;
+    font-weight: bold;
+    color: #ff9900;
+    padding-bottom: 8px;
+    border-bottom: 1px solid #222222;
+    margin-bottom: 15px;
+}
+section[data-testid="stSidebar"] {
+    background-color: #050505 !important;
+    border-right: 1px solid #222222;
+}
+[data-testid="metric-container"] {
+    background-color: #0d0d0d;
+    border: 1px solid #222222;
+    padding: 10px;
+    border-radius: 4px;
 }
 .news-card {
-    background-color: #111111;
-    padding: 18px;
-    border-radius: 16px;
-    margin-bottom: 15px;
-    border: 1px solid #222222;
+    background-color: #0d0d0d;
+    padding: 14px;
+    margin-bottom: 8px;
+    border-bottom: 1px solid #222222;
 }
 .ticker {
+    color: #ff9900;
     font-weight: bold;
-    font-size: 18px;
-    color: #1d9bf0;
 }
 .time {
+    color: #aaaaaa;
     font-size: 12px;
-    color: #888888;
 }
 .title {
-    font-size: 16px;
-    color: white;
+    color: #ffffff;
+    font-size: 14px;
 }
-.badge-red { color: #ff4d4d; font-weight:bold;}
-.badge-orange { color: #ff9900; font-weight:bold;}
-.badge-yellow { color: #ffcc00; font-weight:bold;}
-a { color: #1d9bf0; text-decoration:none;}
+.badge {
+    color: #ff9900;
+    font-size: 12px;
+}
+a {
+    color: #ff9900;
+    text-decoration: none;
+}
+hr {
+    border: 0;
+    height: 1px;
+    background: #222222;
+}
 </style>
 """, unsafe_allow_html=True)
+
+st.markdown('<div class="bloom-header">TEA <NEWS> RUSSELL 3000 – ULTRA LIVE</div>', unsafe_allow_html=True)
 
 # -------------------------------------------------
 # INIT STATE
@@ -80,20 +108,19 @@ def load_russell():
 russell_set = load_russell()
 
 # -------------------------------------------------
-# SCORING
+# SCORING FUNCTION
 # -------------------------------------------------
 
-def catalyst_score(title):
-    title_lower = title.lower()
-
-    if any(w in title_lower for w in ["earnings", "guidance"]):
-        return 3, "EARNINGS"
-    elif any(w in title_lower for w in ["merger", "acquisition", "fda"]):
-        return 2, "MAJOR EVENT"
-    elif any(w in title_lower for w in ["upgrade", "downgrade", "analyst"]):
-        return 1, "ANALYST"
+def catalyst_label(title):
+    t = title.lower()
+    if "earnings" in t or "guidance" in t:
+        return "EARNINGS"
+    elif "merger" in t or "acquisition" in t or "fda" in t:
+        return "MAJOR EVENT"
+    elif "upgrade" in t or "downgrade" in t or "analyst" in t:
+        return "ANALYST"
     else:
-        return 0, "NEWS"
+        return "NEWS"
 
 # -------------------------------------------------
 # FETCH NEWS
@@ -121,21 +148,20 @@ for article in data.get("results", []):
     except:
         continue
 
-    # 🔥 ULTRA LIVE FILTER (≤ 15 minutes)
+    # ULTRA LIVE FILTER
     if now - published > timedelta(minutes=MAX_AGE_MINUTES):
         continue
 
     for ticker in article.get("tickers", []):
         if ticker in russell_set:
 
-            score, label = catalyst_score(article["title"])
+            label = catalyst_label(article["title"])
 
             news_item = {
                 "ticker": ticker,
                 "title": article["title"],
                 "time": published,
                 "url": article["article_url"],
-                "score": score,
                 "label": label
             }
 
@@ -145,7 +171,7 @@ for article in data.get("results", []):
 
             if DISCORD_WEBHOOK:
                 payload = {
-                    "content": f"🚨 **{ticker} {label}**\n{article['title']}\n{article['article_url']}"
+                    "content": f"🚨 {ticker} {label}\n{article['title']}\n{article['article_url']}"
                 }
                 try:
                     requests.post(DISCORD_WEBHOOK, json=payload, timeout=5)
@@ -165,47 +191,35 @@ def time_ago(dt):
     seconds = int(delta.total_seconds())
     if seconds < 60:
         return f"{seconds}s"
-    elif seconds < 600:
+    elif seconds < 3600:
         return f"{seconds//60}m"
     else:
         return f"{seconds//3600}h"
 
 with col1:
-
     for item in st.session_state.feed:
-
-        age_seconds = (now - item["time"]).total_seconds()
-
-        if age_seconds < 300:
-            badge_class = "badge-red"
-        elif age_seconds < 900:
-            badge_class = "badge-orange"
-        else:
-            badge_class = "badge-yellow"
-
         st.markdown(f"""
         <div class="news-card">
-            <div class="ticker">${item['ticker']}</div>
+            <div class="ticker">{item['ticker']}</div>
             <div class="time">{time_ago(item['time'])} ago</div>
             <div class="title">{item['title']}</div>
-            <div class="{badge_class}">{item['label']}</div>
-            <br>
-            <a href="{item['url']}" target="_blank">View Article</a>
+            <div class="badge">{item['label']}</div>
+            <a href="{item['url']}" target="_blank">OPEN</a>
         </div>
         """, unsafe_allow_html=True)
 
 with col2:
 
-    st.markdown("### 📊 Ultra Live Terminal")
+    st.markdown("### TERMINAL")
 
-    st.metric("Active Catalysts", len(st.session_state.feed))
+    st.metric("ACTIVE CATALYSTS", len(st.session_state.feed))
 
     ticker_counts = Counter([x["ticker"] for x in st.session_state.feed])
     top = ticker_counts.most_common(5)
 
-    st.markdown("#### 🔥 Most Active")
+    st.markdown("#### MOST ACTIVE")
     for t, c in top:
         st.write(f"{t} : {c}")
 
-    st.markdown("#### ⏱ Last Update")
+    st.markdown("#### LAST UPDATE")
     st.write(now.strftime("%H:%M:%S UTC"))
