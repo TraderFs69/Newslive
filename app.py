@@ -1,7 +1,7 @@
 import streamlit as st
 import requests
 import pandas as pd
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from streamlit_autorefresh import st_autorefresh
 from collections import Counter
 
@@ -19,19 +19,24 @@ if not POLYGON_KEY:
     st.error("POLYGON_API_KEY manquante.")
     st.stop()
 
+MAX_AGE_MINUTES = 15
+
 # -------------------------------------------------
-# STYLE TERMINAL DARK
+# STYLE FULL BLACK TERMINAL
 # -------------------------------------------------
 
 st.markdown("""
 <style>
-body { background-color: #000000; }
+html, body, [class*="css"] {
+    background-color: #000000 !important;
+    color: white !important;
+}
 .news-card {
-    background-color: #16181c;
-    padding: 15px;
-    border-radius: 15px;
+    background-color: #111111;
+    padding: 18px;
+    border-radius: 16px;
     margin-bottom: 15px;
-    border: 1px solid #2f3336;
+    border: 1px solid #222222;
 }
 .ticker {
     font-weight: bold;
@@ -40,15 +45,15 @@ body { background-color: #000000; }
 }
 .time {
     font-size: 12px;
-    color: #71767b;
+    color: #888888;
 }
 .title {
     font-size: 16px;
     color: white;
 }
 .badge-red { color: #ff4d4d; font-weight:bold;}
+.badge-orange { color: #ff9900; font-weight:bold;}
 .badge-yellow { color: #ffcc00; font-weight:bold;}
-.badge-blue { color: #1d9bf0; font-weight:bold;}
 a { color: #1d9bf0; text-decoration:none;}
 </style>
 """, unsafe_allow_html=True)
@@ -75,28 +80,20 @@ def load_russell():
 russell_set = load_russell()
 
 # -------------------------------------------------
-# SCORING FUNCTION
+# SCORING
 # -------------------------------------------------
 
 def catalyst_score(title):
     title_lower = title.lower()
-    score = 0
-    label = ""
 
-    if any(word in title_lower for word in ["earnings", "guidance"]):
-        score = 3
-        label = "EARNINGS"
-    elif any(word in title_lower for word in ["merger", "acquisition", "fda"]):
-        score = 2
-        label = "MAJOR EVENT"
-    elif any(word in title_lower for word in ["upgrade", "downgrade", "analyst"]):
-        score = 1
-        label = "ANALYST"
+    if any(w in title_lower for w in ["earnings", "guidance"]):
+        return 3, "EARNINGS"
+    elif any(w in title_lower for w in ["merger", "acquisition", "fda"]):
+        return 2, "MAJOR EVENT"
+    elif any(w in title_lower for w in ["upgrade", "downgrade", "analyst"]):
+        return 1, "ANALYST"
     else:
-        score = 0
-        label = "NEWS"
-
-    return score, label
+        return 0, "NEWS"
 
 # -------------------------------------------------
 # FETCH NEWS
@@ -105,6 +102,8 @@ def catalyst_score(title):
 url = f"https://api.polygon.io/v2/reference/news?limit=50&apiKey={POLYGON_KEY}"
 response = requests.get(url, timeout=10)
 data = response.json()
+
+now = datetime.now(timezone.utc)
 
 for article in data.get("results", []):
 
@@ -115,12 +114,19 @@ for article in data.get("results", []):
     if article_id in st.session_state.sent_ids:
         continue
 
+    try:
+        published = datetime.fromisoformat(
+            article["published_utc"].replace("Z", "+00:00")
+        )
+    except:
+        continue
+
+    # 🔥 ULTRA LIVE FILTER (≤ 15 minutes)
+    if now - published > timedelta(minutes=MAX_AGE_MINUTES):
+        continue
+
     for ticker in article.get("tickers", []):
         if ticker in russell_set:
-
-            published = datetime.fromisoformat(
-                article["published_utc"].replace("Z", "+00:00")
-            )
 
             score, label = catalyst_score(article["title"])
 
@@ -149,34 +155,33 @@ for article in data.get("results", []):
             break
 
 # -------------------------------------------------
-# DISPLAY LAYOUT
+# DISPLAY
 # -------------------------------------------------
 
 col1, col2 = st.columns([3,1])
 
-# LEFT FEED
-with col1:
+def time_ago(dt):
+    delta = datetime.now(timezone.utc) - dt
+    seconds = int(delta.total_seconds())
+    if seconds < 60:
+        return f"{seconds}s"
+    elif seconds < 600:
+        return f"{seconds//60}m"
+    else:
+        return f"{seconds//3600}h"
 
-    def time_ago(dt):
-        delta = datetime.now(timezone.utc) - dt
-        seconds = int(delta.total_seconds())
-        if seconds < 60:
-            return f"{seconds}s"
-        elif seconds < 3600:
-            return f"{seconds//60}m"
-        elif seconds < 86400:
-            return f"{seconds//3600}h"
-        else:
-            return f"{seconds//86400}d"
+with col1:
 
     for item in st.session_state.feed:
 
-        if item["score"] == 3:
+        age_seconds = (now - item["time"]).total_seconds()
+
+        if age_seconds < 300:
             badge_class = "badge-red"
-        elif item["score"] == 2:
-            badge_class = "badge-yellow"
+        elif age_seconds < 900:
+            badge_class = "badge-orange"
         else:
-            badge_class = "badge-blue"
+            badge_class = "badge-yellow"
 
         st.markdown(f"""
         <div class="news-card">
@@ -189,13 +194,11 @@ with col1:
         </div>
         """, unsafe_allow_html=True)
 
-# RIGHT PANEL TERMINAL
 with col2:
 
-    st.markdown("### 📊 Catalyst Terminal")
+    st.markdown("### 📊 Ultra Live Terminal")
 
-    total = len(st.session_state.feed)
-    st.metric("Total Catalysts", total)
+    st.metric("Active Catalysts", len(st.session_state.feed))
 
     ticker_counts = Counter([x["ticker"] for x in st.session_state.feed])
     top = ticker_counts.most_common(5)
@@ -205,4 +208,4 @@ with col2:
         st.write(f"{t} : {c}")
 
     st.markdown("#### ⏱ Last Update")
-    st.write(datetime.now().strftime("%H:%M:%S UTC"))
+    st.write(now.strftime("%H:%M:%S UTC"))
